@@ -34,10 +34,15 @@ export class TikoAccessory {
     this.service.getCharacteristic(this.platform.Characteristic.CurrentTemperature)
       .onGet(this.getCurrentTemperature.bind(this));
 
-    this.service.getCharacteristic(this.platform.Characteristic.TargetHeatingCoolingState)
-      .onGet(this.getTargetHeatingCoolingState.bind(this));
-    this.service.getCharacteristic(this.platform.Characteristic.TargetHeatingCoolingState)
-      .onSet(this.setTargetHeatingCoolingState.bind(this));
+    const targetHeatingCoolingState = this.service.getCharacteristic(this.platform.Characteristic.TargetHeatingCoolingState);
+    targetHeatingCoolingState.setProps({
+      validValues: [
+        this.platform.Characteristic.TargetHeatingCoolingState.OFF,
+        this.platform.Characteristic.TargetHeatingCoolingState.HEAT,
+      ],
+    });
+    targetHeatingCoolingState.onGet(this.getTargetHeatingCoolingState.bind(this));
+    targetHeatingCoolingState.onSet(this.setTargetHeatingCoolingState.bind(this));
 
     this.service.getCharacteristic(this.platform.Characteristic.CurrentHeatingCoolingState)
       .onGet(this.getCurrentHeatingCoolingState.bind(this));
@@ -52,18 +57,49 @@ export class TikoAccessory {
     const {id, name} = this.accessory.context.room;
     const targetTemperature = Number(value);
 
-    const room = await this.platform.tiko.getRoom(id);
-    const currentMode = this._getCurrentMode(room.mode);
-    if (currentMode) {
-      this.platform.log.debug(
-        `Ignoring SET target temperature to "${targetTemperature}" for room "${name}" because mode "${currentMode}" is set`,
-      );
-      return;
+    let mode: TikoMode = null;
+    let shouldSetTemperature = false;
+
+    // Map specific temperatures to modes
+    switch (targetTemperature) {
+      case 10:
+        mode = 'disableHeating';
+        break;
+      case 11:
+        mode = 'frost';
+        break;
+      case 12:
+        mode = 'sleep';
+        break;
+      case 13:
+        mode = null;
+        break;
+      case 30:
+        mode = 'comfort';
+        break;
+      default:
+        // For temperatures between 14-29°C, set actual temperature with no mode
+        if (targetTemperature >= 14 && targetTemperature <= 29) {
+          mode = null;
+          shouldSetTemperature = true;
+        } else {
+          this.platform.log.warn(
+            `Invalid target temperature "${targetTemperature}" for room "${name}". Must be 10-13 or 14-30.`,
+          );
+          return;
+        }
     }
 
-    this.platform.log.debug(`SET target temperature for room "${name}" to ${value}`);
+    this.platform.log.debug(`SET target temperature for room "${name}" to ${value} (mode: ${mode}, setTemp: ${shouldSetTemperature})`);
+
     try {
-      await this.platform.tiko.setTargetTemperature(id, targetTemperature);
+      // Always set the mode first (or clear it)
+      await this.platform.tiko.setRoomMode(id, mode);
+
+      // Only set temperature if in the 14-29 range
+      if (shouldSetTemperature) {
+        await this.platform.tiko.setTargetTemperature(id, targetTemperature);
+      }
     } catch (error) {
       this._handleErrorWhileTryingTo('set target temperature', error as Error);
     }
@@ -74,10 +110,7 @@ export class TikoAccessory {
   }
 
   async getCurrentHeatingCoolingState(): Promise<CharacteristicValue> {
-    const targetHeatingCoolingState = await this.getTargetHeatingCoolingState();
-    return targetHeatingCoolingState === this.platform.Characteristic.TargetHeatingCoolingState.AUTO
-      ? this.platform.Characteristic.TargetHeatingCoolingState.HEAT
-      : targetHeatingCoolingState;
+    return await this.getTargetHeatingCoolingState();
   }
 
   async getTargetHeatingCoolingState(): Promise<CharacteristicValue> {
@@ -95,16 +128,13 @@ export class TikoAccessory {
       switch (currentMode) {
         case 'disableHeating':
         case 'frost':
+        case 'absence':
+        case 'sleep':
           state = this.platform.Characteristic.TargetHeatingCoolingState.OFF;
           break;
-        case 'absence':
-          state = this.platform.Characteristic.TargetHeatingCoolingState.COOL;
-          break;
-        case 'boost':
+        default:
           state = this.platform.Characteristic.TargetHeatingCoolingState.HEAT;
           break;
-        default:
-          state = this.platform.Characteristic.TargetHeatingCoolingState.AUTO;
       }
       return state;
     } catch (error) {
@@ -119,13 +149,10 @@ export class TikoAccessory {
     let mode: TikoMode;
     switch (value) {
       case this.platform.Characteristic.TargetHeatingCoolingState.OFF:
-        mode = 'frost';
-        break;
-      case this.platform.Characteristic.TargetHeatingCoolingState.COOL:
-        mode = 'absence';
+        mode = 'disableHeating';
         break;
       case this.platform.Characteristic.TargetHeatingCoolingState.HEAT:
-        mode = 'boost';
+        mode = null;
         break;
       default:
         mode = null;

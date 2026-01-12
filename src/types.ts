@@ -34,6 +34,8 @@ export type TikoRoom = {
     absence: boolean;
     frost: boolean;
     disableHeating: boolean;
+    sleep?: boolean;
+    comfort?: boolean;
   };
   status: {
     heatingOperating: boolean;
@@ -48,4 +50,4 @@ export type TikoRoomResponse = {
   };
 };
 
-export type TikoMode = 'boost' | 'absence' | 'frost' | 'disableHeating' | null;
+export type TikoMode = 'boost' | 'absence' | 'frost' | 'disableHeating' | 'sleep' | 'comfort' | null;
